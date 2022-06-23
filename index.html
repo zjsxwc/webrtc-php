@@ -7,7 +7,7 @@
 <body>
 <div>
     <video id="localVideo" autoplay="true" muted="muted"></video>
-    <video id="remoteVideo" autoplay="true" style="display:none"></video>
+    <video id="remoteVideo" autoplay="true" ></video>
 </div>
 
 
@@ -198,15 +198,18 @@
         try {//由于最新浏览器不再支持addStream，改为使用addTrack来代替addStream
             pc.addStream(localStream);
         }catch(e){
+		
+		 //把我的本地视频流给对方
             var tracks = localStream.getTracks();
             for(var i=0;i<tracks.length;i++){
                 pc.addTrack(tracks[i], localStream);
             }
+		
         }
+	    
+	    //参考 https://github.com/engineering123semester/WebRTC_Video_call/blob/main/Scripts/chatapp.js#L302 中 gotRemoteStream
         pc.ontrack = function (e) {
-            //有track就播放远程stream
-            document.getElementById('remoteVideo').style.display="block";
-            document.getElementById('localVideo').style.display="none";
+            //有新对方track时就播放对方远程stream
             remoteVideo.srcObject = e.streams[0];
         };
     }
