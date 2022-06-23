@@ -9,6 +9,30 @@
     <video id="localVideo" autoplay="true" muted="muted"></video>
     <video id="remoteVideo" autoplay="true" style="display:none"></video>
 </div>
+
+
+<pre>
+    pc初始化构建时的configuration里的iceServers中的stun url就是内网穿透服务器网络地址与端口。
+    icecandidate是ICE（Interactive交互式 Connectivity连接 Establishment建立成功）的备选，用去确定使用哪个内网穿透线路最快速。
+    offer与answer都是SDP协议的成对消息格式，SDP全称是Session Description Protocol 也就是回话描述协议，offer与answer里面包含了两端浏览器各自支持的音视频codec协议，音视视频寻址，音视频时间处理同步等。
+
+    A:
+0    `local video` add `browser user media stream` to `local video`'s srcObject.
+1    after `local video` loaded metadata, 告诉php我这边准备好了(php使用'client-call'来标记存储这条消息）。
+3    php长链接异步通知了我，有个'client-offer'消息，我pc.setRemoteDescription(new RTCSessionDescription(对方offer的desc)）存储了对方offer的desc后，创建一个answer，然后把我的answer的desc，通过setLocalDescription保存后，告诉php去中转这个answer（php用'client-answer'标记），同时setLocalDescription完成也会异步触发pc.onicecandidate，于是通过php中转告诉远方我新获得的这个candidate，
+
+
+    B:
+0    `local video` add `browser user media stream` to `local video`'s srcObject.
+1    after `local video` loaded metadata, 告诉php我这边准备好了(使用'client-call'来标记存储这条消息）。
+2    php长链接异步通知了我，有个'client-call'消息，我创建offer，把offer的desc通过setLocalDescription保存后，告诉php去中转这个offer desc（php用'client-offer'标记），同时setLocalDescription完成也会异步触发pc.onicecandidate，于是通过php中转告诉远方我新获得的这个candidate。
+4    php长链接异步通知了我，有个'client-answer'消息，我pc.setRemoteDescription(new RTCSessionDescription(对方answer的desc)）存储了对方answer的desc。
+
+
+    关于播放：
+    这里都是当pc有track的时候，无脑让`remote video`播放track事件的stream。
+
+</pre>
 <script type="text/javascript">
 
     var answer = 0;
@@ -66,6 +90,8 @@
             // multiple events at once for speed, because the polling 
             // frequency of EventSource is low.
 			ws.onmessage = function(e) {
+                //收到来自php的第一条不是自己发的消息，php会把这条消息发送后删除
+
 				if (e.data.includes("_MULTIPLEVENTS_")) {
 					multiple = e.data.split("_MULTIPLEVENTS_");
 					for (x=0; x<multiple.length; x++) {
@@ -89,20 +115,23 @@
 		
     
     function onsinglemessage(data) {
+
         var package = JSON.parse(data);
         var data = package.data;
         
         console.log("received single message: " + package.event);
         switch (package.event) {
             case 'client-call':
+                //A与B都会 触发发送 call，在也video.src=UserMedia.camera-stream loadedmetadata的时候
                 icecandidate(localStream);
                 pc.createOffer({
                     offerToReceiveAudio: 1,
                     offerToReceiveVideo: 1
                 }).then(function (desc) {
+                    //setLocalDescription()后  会触发pc.onicecandidate
                     pc.setLocalDescription(desc).then(
                         function () {
-                            publish('client-offer', pc.localDescription);
+                            publish('client-offer', pc.localDescription);//A 用户发送了 offer
                         }
                     ).catch(function (e) {
                         console.log("Problem with publishing client offer"+e);
@@ -112,21 +141,26 @@
                 });
                 break;
             case 'client-answer':
+                //A 通过php中转 收到B的 answer
                 if (pc==null) {
                     console.error('Before processing the client-answer, I need a client-offer');
                     break;
                 }
+                //data 就是 B的pc.localDescription
                 pc.setRemoteDescription(new RTCSessionDescription(data),function(){}, 
                     function(e) { console.log("Problem while doing client-answer: ",e);
                 });
                 break;
             case 'client-offer':
-                icecandidate(localStream);
+                //B用户 通过php中转收到了 offer
+                icecandidate(localStream);//这句其实不需要
+                //data 就是 A的pc.localDescription
                 pc.setRemoteDescription(new RTCSessionDescription(data), function(){
+                    //setRemoteDescription最新文档只有1个参数，盲猜这边是过时的参数第二个参数是 setRemoteDescription 成功后回调， 第三个是失败了回调
                     if (!answer) {
                         pc.createAnswer(function (desc) {
                                 pc.setLocalDescription(desc, function () {
-                                    publish('client-answer', pc.localDescription);
+                                    publish('client-answer', pc.localDescription);//B 通过php中转返回告诉A  answer
                                 }, function(e){
                                     console.log("Problem getting client answer: ",e);
                                 });
@@ -141,6 +175,8 @@
                 });
                 break;
             case 'client-candidate':
+                //B通过php中转获得远方A的新获得的candidate
+                //data就是A的新获得的candidate
                if (pc==null) {
                     console.error('Before processing the client-answer, I need a client-offer');
                     break;
@@ -154,11 +190,12 @@
     function icecandidate(localStream) {
         pc = new RTCPeerConnection(configuration);
         pc.onicecandidate = function (event) {
+            //会被自己的 RTCPeerConnection.setLocalDescription()后  触发， A获得自己的event.candidate后，通过php中转告诉远方B我新获得的这个candidate
             if (event.candidate) {
                 publish('client-candidate', event.candidate);
             }
         };
-        try {
+        try {//由于最新浏览器不再支持addStream，改为使用addTrack来代替addStream
             pc.addStream(localStream);
         }catch(e){
             var tracks = localStream.getTracks();
@@ -167,6 +204,7 @@
             }
         }
         pc.ontrack = function (e) {
+            //有track就播放远程stream
             document.getElementById('remoteVideo').style.display="block";
             document.getElementById('localVideo').style.display="none";
             remoteVideo.srcObject = e.streams[0];
