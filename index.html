@@ -187,7 +187,13 @@
         }
     };
 
+	//不应该命名成icecandidate，这个函数里面初始化了pc，处理了icecandidate的回调，也处理双方视频播放
     function icecandidate(localStream) {
+	    
+	    if (pc) {
+	      return;
+	    }
+	    
         pc = new RTCPeerConnection(configuration);
         pc.onicecandidate = function (event) {
             //会被自己的 RTCPeerConnection.setLocalDescription()后  触发， A获得自己的event.candidate后，通过php中转告诉远方B我新获得的这个candidate
@@ -195,17 +201,13 @@
                 publish('client-candidate', event.candidate);
             }
         };
-        try {//由于最新浏览器不再支持addStream，改为使用addTrack来代替addStream
-            pc.addStream(localStream);
-        }catch(e){
-		
-		 //把我的本地视频流给对方
+        
+
+	    //把我的本地视频流给对方
             var tracks = localStream.getTracks();
             for(var i=0;i<tracks.length;i++){
-                pc.addTrack(tracks[i], localStream);
+                pc.addTrack(tracks[i], localStream);//由于最新浏览器不再支持addStream，改为使用addTrack来代替addStream
             }
-		
-        }
 	    
 	    //参考 https://github.com/engineering123semester/WebRTC_Video_call/blob/main/Scripts/chatapp.js#L302 中 gotRemoteStream
         pc.ontrack = function (e) {
